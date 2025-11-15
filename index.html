@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eyewake (FastAPI)</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #282c34;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        #video-container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #61dafb;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+        #status-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 1.2em;
+            line-height: 1.5;
+        }
+        .controls, .stats {
+            margin-top: 20px;
+        }
+        button {
+            background-color: #61dafb;
+            border: none;
+            color: #282c34;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #ffffff;
+        }
+        #canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>🕶️ Eyewake (FastAPI + WebSocket)</h1>
+
+    <audio id="alert-sound" src="alert.mp3" preload="auto"></audio>
+
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        <div id="status-overlay">
+            <div id="status-text">Status: CONNECTING...</div>
+            <div id="counts-text">Yawns: 0 • Alerts: 0</div>
+        </div>
+    </div>
+
+    <div class="stats">
+        <span id="eye-text">Eye(px): 0.0</span> | 
+        <span id="mouth-text">Mouth(px): 0.0</span> | 
+        <span id="thresh-text">Baseline: 0.0 | Threshold: 0.0</span>
+    </div>
+
+    <div class="controls">
+        <button id="calibrate-btn">Calibrate</button>
+        <button id="reset-btn">Reset Counts</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        // DOM Elements
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        
+        // Status display
+        const statusText = document.getElementById('status-text');
+        const countsText = document.getElementById('counts-text');
+        const eyeText = document.getElementById('eye-text');
+        const mouthText = document.getElementById('mouth-text');
+        const threshText = document.getElementById('thresh-text');
+
+        // Buttons
+        const calibrateBtn = document.getElementById('calibrate-btn');
+        const resetBtn = document.getElementById('reset-btn');
+
+        // *** ADDED: Get audio element ***
+        const alertSound = document.getElementById('alert-sound');
+
+        // WebSocket
+        let ws;
+        const wsURL = `ws://${window.location.host}/ws`;
+        
+        // --- 1. WebSocket Setup ---
+        function setupWebSocket() {
+            ws = new WebSocket(wsURL);
+
+            ws.onopen = () => {
+                console.log("Connected to WebSocket.");
+                statusText.textContent = "Status: CONNECTED";
+                startFrameSending();
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                statusText.textContent = `Status: ${data.status}`;
+                countsText.textContent = `Yawns: ${data.yawns} • Alerts: ${data.alerts}`;
+                eyeText.textContent = `Eye(px): ${data.eye_avg}`;
+                mouthText.textContent = `Mouth(px): ${data.mouth_avg}`;
+                threshText.textContent = `Baseline: ${data.baseline} | Threshold: ${data.eye_thresh}`;
+
+                // *** ADDED: Play sound logic ***
+                if (data.status === "DROWSY") {
+                    if (alertSound.paused) { // Play only if not already playing
+                        alertSound.play().catch(e => {
+                            // Catch errors in case browser blocks autoplay
+                            console.error("Audio play failed:", e);
+                        });
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket disconnected. Retrying in 2 seconds...");
+                statusText.textContent = "Status: DISCONNECTED. Retrying...";
+                setTimeout(setupWebSocket, 2000); 
+            };
+
+            ws.onerror = (err) => {
+                console.error("WebSocket error:", err);
+                statusText.textContent = "Status: ERROR";
+            };
+        }
+
+        // --- 2. Camera Setup ---
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Error accessing camera:", err);
+                statusText.textContent = "Status: CAMERA ERROR";
+                alert("Could not access camera. Please grant permission and reload.");
+            }
+        }
+
+        // --- 3. Frame Sending Logic ---
+        function startFrameSending() {
+            setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN && video.readyState === 4 && video.videoWidth > 0) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    context.scale(-1, 1);
+                    context.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+                    context.setTransform(1, 0, 0, 1, 0, 0); 
+
+                    const dataURL = canvas.toDataURL('image/jpeg', 0.7);
+                    ws.send(dataURL);
+                }
+            }, 100); // 10 FPS
+        }
+
+        // --- 4. Button Event Listeners ---
+        calibrateBtn.onclick = () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send("CALIBRATE");
+                statusText.textContent = "Status: CALIBRATING...";
+            }
+        };
+
+        resetBtn.onclick = () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send("RESET"); 
+            }
+        };
+
+        // --- 5. Start Everything ---
+        async function main() {
+            await setupCamera();
+            setupWebSocket();
+        }
+
+        main();
+
+    </script>
+</body>
+</html>
