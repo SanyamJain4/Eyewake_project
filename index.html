@@ -113,7 +113,9 @@
 
         // WebSocket
         let ws;
-        const wsURL = `ws://${window.location.host}/ws`;
+        // This is the new, correct code
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsURL = `${protocol}//${window.location.host}/ws`;
         
         // --- 1. WebSocket Setup ---
         function setupWebSocket() {
@@ -213,4 +215,5 @@
 
     </script>
 </body>
+
 </html>
